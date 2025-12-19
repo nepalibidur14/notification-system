@@ -4,11 +4,23 @@ import { CreateNotificationDto } from './dto/create-notification.dto.js';
 
 @Controller()
 export class NotificationsController {
-    constructor(private readonly notificationsService:NotificationsService) {}
+  constructor(private readonly notificationsService: NotificationsService) {}
 
-    @Post('/v1/notifications')
-    @HttpCode(HttpStatus.ACCEPTED)
-    async create(@Body() dto:CreateNotificationDto) {
-        return this.notificationsService.create(dto)
-    }
+  @Post('/v1/notifications')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async create(@Body() dto: CreateNotificationDto) {
+    return this.notificationsService.create(dto);
+  }
+
+  @Post('/v1/notifications/claim')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async claim() {
+    return this.notificationsService.claimNextPerTenant();
+  }
+
+  @Post('/v1/notifications/send-next')
+  @HttpCode(200)
+  async sendNext() {
+    return this.notificationsService.sendNext();
+  }
 }

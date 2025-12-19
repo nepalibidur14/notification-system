@@ -3,10 +3,10 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
-import { NotificationsController } from './notifications/notifications.controller.js';
+import { MailerSendModule } from './providers/mailersend/mailersend.module.js';
 
 @Module({
-  imports: [PrismaModule, NotificationsModule],
+  imports: [PrismaModule, NotificationsModule, MailerSendModule],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -8,20 +8,25 @@ datasource db {
 }
 
 model Notification {
-  id             String               @id @default(uuid())
-  tenantId       String
-  idempotencyKey String
-  requestHash    String
-  eventType      String
-  priority       NotificationPriority
-  toEmail        String
-  toName         String?
-  templateId     String
-  variables      Json
-  status         NotificationStatus   @default(ACCEPTED)
-  expiresAt      DateTime?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  id                  String               @id @default(uuid())
+  tenantId            String
+  idempotencyKey      String
+  requestHash         String
+  eventType           String
+  priority            NotificationPriority
+  toEmail             String
+  toName              String?
+  templateId          String
+  variables           Json
+  status              NotificationStatus   @default(ACCEPTED)
+  attempts            Int                  @default(0) //track retries / prevent infinite loops
+  lastError           String?              //store last failure reason for debugging
+  provider            String?              //later you might support multiple providers; even with one provider, it’s good to record it
+  providerMessageId   String?              //MailerSend returns a message id header; you store it to match webhooks later
+  sentAt              DateTime?            //record when it was successfully sent
+  expiresAt           DateTime?            
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@unique([tenantId, idempotencyKey], name: "tenantId_idempotencyKey")
   @@index([tenantId, createdAt])
@@ -36,4 +41,8 @@ enum NotificationPriority {
 
 enum NotificationStatus {
   ACCEPTED
+  SENDING
+  SENT
+  FAILED
+  DROPPED
 }
