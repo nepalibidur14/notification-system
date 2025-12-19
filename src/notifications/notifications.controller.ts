@@ -23,4 +23,10 @@ export class NotificationsController {
   async sendNext() {
     return this.notificationsService.sendNext();
   }
+
+  @Post('/v1/notifications/recover-stuck')
+  @HttpCode(200)
+  recover() {
+    return this.notificationsService.recoverStuckSending();
+  }
 }

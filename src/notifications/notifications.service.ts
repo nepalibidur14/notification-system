@@ -106,7 +106,6 @@ export class NotificationsService {
   }
 
   async claimNextPerTenant() {
-    console.log('i am triggered');
     try {
       const rows = await this.prisma.$queryRaw<any[]>`
     WITH candidate_tenant AS (
@@ -114,6 +113,7 @@ export class NotificationsService {
       FROM "Notification"
       WHERE "status" = 'ACCEPTED'
         AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+        AND ("nextAttemptAt" IS NULL OR "nextAttemptAt" <= NOW())
       GROUP BY "tenantId"
       ORDER BY MIN("createdAt") ASC
       LIMIT 1
@@ -144,12 +144,12 @@ export class NotificationsService {
     SET
       "status" = 'SENDING',
       "attempts" = "attempts" + 1,
+      "lockedAt" = NOW(),
       "updatedAt" = NOW()
     FROM candidate
     WHERE u."id" = candidate."id"
     RETURNING u.*;
   `;
-      console.log('returned rows:', rows);
       return rows[0] ?? null;
     } catch (err) {
       console.error(err);
@@ -161,11 +161,29 @@ export class NotificationsService {
     const claimed = await this.claimNextPerTenant();
     if (!claimed) return null;
 
+    // Extra safety: if expired, drop (claim query already filters, but keep this guard)
+    if (
+      claimed.expiresAt &&
+      new Date(claimed.expiresAt).getTime() <= Date.now()
+    ) {
+      const updated = await this.prisma.notification.update({
+        where: { id: claimed.id },
+        data: {
+          status: 'DROPPED',
+          lockedAt: null,
+          nextAttemptAt: null,
+          lastError: 'Dropped: expired before send',
+        },
+      });
+
+      return { notificationId: updated.id, status: updated.status };
+    }
+
     try {
       const { providerMessageId } = await this.mailerSend.sendTemplateEmail({
         toEmail: claimed.toEmail,
         templateId: claimed.templateId,
-        variables: claimed.variables as any, // Prisma returns JSON; this is fine for sending
+        variables: claimed.variables as any,
       });
 
       const updated = await this.prisma.notification.update({
@@ -176,6 +194,8 @@ export class NotificationsService {
           providerMessageId,
           sentAt: new Date(),
           lastError: null,
+          lockedAt: null,
+          nextAttemptAt: null,
         },
       });
 
@@ -185,20 +205,69 @@ export class NotificationsService {
         providerMessageId,
       };
     } catch (e: any) {
-      await this.prisma.notification.update({
+      const errorMsg = String(e?.message ?? e);
+
+      // attempts is already incremented at claim time
+      const attemptsNow: number = claimed.attempts;
+
+      // If max attempts reached => terminal FAILED
+      if (attemptsNow >= this.MAX_ATTEMPTS) {
+        const updated = await this.prisma.notification.update({
+          where: { id: claimed.id },
+          data: {
+            status: 'FAILED',
+            lastError: errorMsg,
+            lockedAt: null,
+            nextAttemptAt: null,
+          },
+        });
+
+        return {
+          notificationId: updated.id,
+          status: updated.status,
+          error: errorMsg,
+          attempts: updated.attempts,
+        };
+      }
+
+      // Otherwise schedule retry
+      const nextAttemptAt = this.computeNextAttemptAt(attemptsNow);
+
+      const updated = await this.prisma.notification.update({
         where: { id: claimed.id },
         data: {
-          status: 'FAILED',
-          lastError: String(e?.message ?? e),
+          status: 'ACCEPTED',
+          lastError: errorMsg,
+          lockedAt: null,
+          nextAttemptAt,
         },
       });
 
       return {
-        notificationId: claimed.id,
-        status: 'FAILED',
-        error: String(e?.message ?? e),
+        notificationId: updated.id,
+        status: 'RETRY_SCHEDULED',
+        error: errorMsg,
+        attempts: updated.attempts,
+        nextAttemptAt: updated.nextAttemptAt,
       };
     }
+  }
+
+  async recoverStuckSending() {
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        status: 'SENDING',
+        lockedAt: { lt: new Date(Date.now() - 2 * 60 * 1000) },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      data: {
+        status: 'ACCEPTED',
+        lockedAt: null,
+        nextAttemptAt: new Date(Date.now() + 30_000), // small delay to avoid hot-loop
+      },
+    });
+
+    return { recovered: result.count };
   }
 
   private sha256Json(input: unknown): string {
@@ -219,5 +288,27 @@ export class NotificationsService {
       return out;
     }
     return value;
+  }
+
+  private readonly MAX_ATTEMPTS = 5;
+
+  // attemptIndex: 1-based (because you increment attempts on claim)
+  private retryDelayMs(attemptIndex: number): number {
+    const delays = [10_000, 30_000, 120_000, 600_000, 1_800_000]; // 10s, 30s, 2m, 10m, 30m
+    const idx = Math.min(Math.max(attemptIndex, 1), delays.length) - 1;
+    return delays[idx];
+  }
+
+  private withJitter(baseMs: number, jitterRatio = 0.2): number {
+    const delta = baseMs * jitterRatio;
+    const min = baseMs - delta;
+    const max = baseMs + delta;
+    return Math.max(0, Math.floor(min + Math.random() * (max - min)));
+  }
+
+  private computeNextAttemptAt(attemptIndex: number): Date {
+    const base = this.retryDelayMs(attemptIndex);
+    const ms = this.withJitter(base, 0.2);
+    return new Date(Date.now() + ms);
   }
 }

@@ -24,6 +24,8 @@ model Notification {
   provider            String?              //later you might support multiple providers; even with one provider, it’s good to record it
   providerMessageId   String?              //MailerSend returns a message id header; you store it to match webhooks later
   sentAt              DateTime?            //record when it was successfully sent
+  nextAttemptAt       DateTime?
+  lockedAt            DateTime?
   expiresAt           DateTime?            
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
